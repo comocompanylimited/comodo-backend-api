@@ -450,6 +450,15 @@ def get_cj_token():
 app.include_router(router)               # /products, /categories, etc.
 app.include_router(router, prefix="/api/v1")  # /api/v1/products, etc.
 
+@app.get("/cj/test-token", tags=["CJ Dropshipping"])
+def cj_test_token():
+    response = requests.post(
+        "https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken",
+        json={"apiKey": "PASTE_MY_CJ_API_KEY_HERE"},
+        headers={"Content-Type": "application/json"},
+    )
+    return response.json()
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
