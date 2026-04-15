@@ -3,7 +3,7 @@ import requests
 
 router = APIRouter()
 
-CJ_API_KEY = "PASTE_MY_API_KEY_HERE"
+CJ_API_KEY = "PASTE_MY_CJ_API_KEY_HERE"
 
 
 @router.get("/cj/test-token")
