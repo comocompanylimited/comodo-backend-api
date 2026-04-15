@@ -2,7 +2,7 @@ import os
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from cj_integration import router as cj_router
+from cj_integration import cj_router
 
 app = FastAPI(
     title="Covora Backend API",
