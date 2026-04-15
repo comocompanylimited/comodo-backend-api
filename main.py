@@ -1,8 +1,8 @@
 import os
+import requests
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-from cj_integration import cj_router
 
 app = FastAPI(
     title="Covora Backend API",
@@ -434,12 +434,21 @@ def search(q: str = Query(default="")):
         or any(term in tag for tag in p.get("tags", []))
     ]
 
+# CJ Dropshipping
+@router.get("/cj/test-token", tags=["CJ Dropshipping"])
+def get_cj_token():
+    url = "https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken"
+    response = requests.post(
+        url,
+        json={"apiKey": "PASTE_MY_CJ_API_KEY_HERE"},
+        headers={"Content-Type": "application/json"},
+    )
+    return response.json()
+
 # ─── Mount router at both / and /api/v1 ──────────────────────────────────────
 
 app.include_router(router)               # /products, /categories, etc.
 app.include_router(router, prefix="/api/v1")  # /api/v1/products, etc.
-app.include_router(cj_router)            # /cj/test-token
-app.include_router(cj_router, prefix="/api/v1")  # /api/v1/cj/test-token
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
