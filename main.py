@@ -2,6 +2,7 @@ import os
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from cj_integration import router as cj_router
 
 app = FastAPI(
     title="Covora Backend API",
@@ -437,6 +438,8 @@ def search(q: str = Query(default="")):
 
 app.include_router(router)               # /products, /categories, etc.
 app.include_router(router, prefix="/api/v1")  # /api/v1/products, etc.
+app.include_router(cj_router)            # /cj/test-token
+app.include_router(cj_router, prefix="/api/v1")  # /api/v1/cj/test-token
 
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
