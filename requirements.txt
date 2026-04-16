@@ -3,3 +3,6 @@ uvicorn[standard]
 python-dotenv
 requests
 stripe
+sqlalchemy
+psycopg2-binary
+alembic

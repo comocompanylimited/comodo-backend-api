@@ -1,10 +1,15 @@
 import os
+import json
 import stripe
 import requests
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Query, APIRouter
+from fastapi import FastAPI, HTTPException, Query, APIRouter, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from database import get_db, engine, Base
+import models_orders  # noqa: registers ORM models
+Base.metadata.create_all(bind=engine)
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 
@@ -509,12 +514,21 @@ def create_checkout_session(body: CheckoutSessionRequest):
             line_items=line_items,
             mode="payment",
             customer_email=body.customer.email,
-            shipping_address_collection={"allowed_countries": ["GB", "US", "AU", "CA", "FR", "DE", "AE", "SG"]},
+            shipping_address_collection={"allowed_countries": ["GB", "US", "AU", "CA", "FR", "DE", "AE", "SG", "NZ"]},
             metadata={
-                "customer_name":  body.customer.name,
-                "customer_phone": body.customer.phone,
-                "shipping_city":  body.shipping.city,
+                "customer_name":    body.customer.name,
+                "customer_email":   body.customer.email,
+                "customer_phone":   body.customer.phone,
+                "shipping_address": body.shipping.address,
+                "shipping_address2": body.shipping.address2,
+                "shipping_city":    body.shipping.city,
+                "shipping_postcode": body.shipping.postcode,
                 "shipping_country": body.shipping.country,
+                "subtotal":         str(body.subtotal),
+                "cart_items":       json.dumps([
+                    {"id": i.id, "name": i.name, "sku": i.sku, "price": i.price, "quantity": i.quantity}
+                    for i in body.cart_items
+                ])[:499],
             },
             success_url=f"{FRONTEND_DOMAIN}/order-confirmation?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{FRONTEND_DOMAIN}/checkout",
@@ -526,6 +540,86 @@ def create_checkout_session(body: CheckoutSessionRequest):
         raise HTTPException(status_code=502, detail=str(e.user_message or e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ─── Order Confirmation ──────────────────────────────────────────────────────
+
+@router.get("/orders/confirm", tags=["Orders"])
+def confirm_order(session_id: str = Query(...), db: Session = Depends(get_db)):
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe not configured.")
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=502, detail=str(e.user_message or e))
+
+    if session.get("payment_status") != "paid":
+        raise HTTPException(status_code=402, detail="Payment not completed.")
+
+    # Return existing order if already saved
+    existing = db.query(models_orders.Order).filter(
+        models_orders.Order.stripe_session_id == session_id
+    ).first()
+    if existing:
+        items = db.query(models_orders.OrderItem).filter(
+            models_orders.OrderItem.order_id == existing.id
+        ).all()
+        return {
+            "order": {k: v for k, v in existing.__dict__.items() if not k.startswith("_")},
+            "items": [{k: v for k, v in i.__dict__.items() if not k.startswith("_")} for i in items],
+        }
+
+    meta = session.get("metadata") or {}
+    subtotal = float(meta.get("subtotal") or 0)
+    total = float(session.get("amount_total") or subtotal * 100) / 100
+
+    order = models_orders.Order(
+        customer_name=meta.get("customer_name", ""),
+        customer_email=meta.get("customer_email") or session.get("customer_email", ""),
+        customer_phone=meta.get("customer_phone", ""),
+        shipping_address=meta.get("shipping_address", ""),
+        shipping_address2=meta.get("shipping_address2", ""),
+        shipping_city=meta.get("shipping_city", ""),
+        shipping_postcode=meta.get("shipping_postcode", ""),
+        shipping_country=meta.get("shipping_country", ""),
+        subtotal=subtotal,
+        total=total,
+        currency=session.get("currency", "nzd"),
+        status="paid",
+        stripe_session_id=session_id,
+        stripe_payment_intent_id=session.get("payment_intent"),
+    )
+    db.add(order)
+    db.flush()
+
+    cart_items = []
+    try:
+        cart_items = json.loads(meta.get("cart_items") or "[]")
+    except Exception:
+        pass
+
+    for item in cart_items:
+        try:
+            unit_price = float(item.get("price") or 0)
+            qty = int(item.get("quantity") or 1)
+            db.add(models_orders.OrderItem(
+                order_id=order.id,
+                product_id=str(item.get("id", "")),
+                sku=item.get("sku", ""),
+                product_name=item.get("name", ""),
+                quantity=qty,
+                unit_price=unit_price,
+                total_price=round(unit_price * qty, 2),
+            ))
+        except Exception:
+            pass
+
+    db.commit()
+    db.refresh(order)
+    items = db.query(models_orders.OrderItem).filter(models_orders.OrderItem.order_id == order.id).all()
+    return {
+        "order": {k: v for k, v in order.__dict__.items() if not k.startswith("_")},
+        "items": [{k: v for k, v in i.__dict__.items() if not k.startswith("_")} for i in items],
+    }
 
 # ─── Mount router at both / and /api/v1 ──────────────────────────────────────
 
