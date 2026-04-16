@@ -9,7 +9,10 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from database import get_db, engine, Base
 import models_orders  # noqa: registers ORM models
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as _db_err:
+    print(f"[WARN] DB table creation skipped: {_db_err}")
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 
@@ -443,20 +446,40 @@ def search(q: str = Query(default="")):
         or any(term in tag for tag in p.get("tags", []))
     ]
 
-# CJ Dropshipping
-@router.get("/cj/test-token", tags=["CJ Dropshipping"])
-def get_cj_token():
-    url = "https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken"
-    response = requests.post(
-        url,
-        json={"apiKey": "PASTE_MY_CJ_API_KEY_HERE"},
-        headers={"Content-Type": "application/json"},
-    )
-    return response.json()
-
 # ─── Stripe Checkout ─────────────────────────────────────────────────────────
 
 FRONTEND_DOMAIN = os.environ.get("FRONTEND_URL", "https://covoralumiere.com")
+
+
+def _safe_cart_meta(items) -> str:
+    """Serialize cart items to fit Stripe's 500-char metadata limit."""
+    result = []
+    for i in items:
+        result.append({"id": i.id, "name": i.name[:80], "sku": i.sku, "price": i.price, "quantity": i.quantity})
+    serialized = json.dumps(result)
+    if len(serialized) <= 499:
+        return serialized
+    # Trim items one by one until it fits
+    while result and len(json.dumps(result)) > 499:
+        result.pop()
+    return json.dumps(result)
+
+
+def _serialize_row(row) -> dict:
+    """Safely serialize a SQLAlchemy row to JSON-safe dict."""
+    from decimal import Decimal
+    import datetime
+    out = {}
+    for k, v in row.__dict__.items():
+        if k.startswith("_"):
+            continue
+        if isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, (datetime.datetime, datetime.date)):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 
 class CheckoutItem(BaseModel):
     id: str
@@ -525,10 +548,7 @@ def create_checkout_session(body: CheckoutSessionRequest):
                 "shipping_postcode": body.shipping.postcode,
                 "shipping_country": body.shipping.country,
                 "subtotal":         str(body.subtotal),
-                "cart_items":       json.dumps([
-                    {"id": i.id, "name": i.name, "sku": i.sku, "price": i.price, "quantity": i.quantity}
-                    for i in body.cart_items
-                ])[:499],
+                "cart_items":       _safe_cart_meta(body.cart_items),
             },
             success_url=f"{FRONTEND_DOMAIN}/order-confirmation?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{FRONTEND_DOMAIN}/checkout",
@@ -564,8 +584,8 @@ def confirm_order(session_id: str = Query(...), db: Session = Depends(get_db)):
             models_orders.OrderItem.order_id == existing.id
         ).all()
         return {
-            "order": {k: v for k, v in existing.__dict__.items() if not k.startswith("_")},
-            "items": [{k: v for k, v in i.__dict__.items() if not k.startswith("_")} for i in items],
+            "order": _serialize_row(existing),
+            "items": [_serialize_row(i) for i in items],
         }
 
     meta = session.get("metadata") or {}
