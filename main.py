@@ -1,8 +1,12 @@
 import os
+import stripe
 import requests
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
 
 app = FastAPI(
     title="Covora Backend API",
@@ -444,6 +448,84 @@ def get_cj_token():
         headers={"Content-Type": "application/json"},
     )
     return response.json()
+
+# ─── Stripe Checkout ─────────────────────────────────────────────────────────
+
+FRONTEND_DOMAIN = os.environ.get("FRONTEND_URL", "https://covora.zeabur.app")
+
+class CheckoutItem(BaseModel):
+    id: str
+    name: str
+    slug: str
+    sku: str = ""
+    price: float
+    quantity: int
+    attributes: Dict[str, Any] = {}
+
+class CheckoutCustomer(BaseModel):
+    name: str
+    email: str
+    phone: str = ""
+
+class CheckoutShipping(BaseModel):
+    address: str
+    address2: str = ""
+    city: str
+    postcode: str
+    country: str
+
+class CheckoutSessionRequest(BaseModel):
+    customer: CheckoutCustomer
+    shipping: CheckoutShipping
+    items: List[CheckoutItem]
+    subtotal: float
+
+@router.post("/checkout/session")
+def create_checkout_session(body: CheckoutSessionRequest):
+    if not stripe.api_key:
+        raise HTTPException(status_code=500, detail="Stripe is not configured on the server.")
+
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Cart is empty.")
+
+    try:
+        line_items = [
+            {
+                "price_data": {
+                    "currency": "gbp",
+                    "unit_amount": round(item.price * 100),  # pence
+                    "product_data": {
+                        "name": item.name,
+                        "metadata": {"slug": item.slug, "sku": item.sku},
+                    },
+                },
+                "quantity": item.quantity,
+            }
+            for item in body.items
+        ]
+
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=line_items,
+            mode="payment",
+            customer_email=body.customer.email,
+            shipping_address_collection={"allowed_countries": ["GB", "US", "AU", "CA", "FR", "DE", "AE", "SG"]},
+            metadata={
+                "customer_name":  body.customer.name,
+                "customer_phone": body.customer.phone,
+                "shipping_city":  body.shipping.city,
+                "shipping_country": body.shipping.country,
+            },
+            success_url=f"{FRONTEND_DOMAIN}/order-confirmation?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_DOMAIN}/checkout",
+        )
+
+        return {"url": session.url}
+
+    except stripe.StripeError as e:
+        raise HTTPException(status_code=502, detail=str(e.user_message or e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ─── Mount router at both / and /api/v1 ──────────────────────────────────────
 
