@@ -475,25 +475,25 @@ class CheckoutShipping(BaseModel):
     country: str
 
 class CheckoutSessionRequest(BaseModel):
+    cart_items: List[CheckoutItem]
     customer: CheckoutCustomer
     shipping: CheckoutShipping
-    items: List[CheckoutItem]
-    subtotal: float
+    subtotal: float = 0.0
 
 @router.post("/checkout/session")
 def create_checkout_session(body: CheckoutSessionRequest):
     if not stripe.api_key:
         raise HTTPException(status_code=500, detail="Stripe is not configured on the server.")
 
-    if not body.items:
+    if not body.cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty.")
 
     try:
         line_items = [
             {
                 "price_data": {
-                    "currency": "gbp",
-                    "unit_amount": round(item.price * 100),  # pence
+                    "currency": "nzd",
+                    "unit_amount": round(item.price * 100),
                     "product_data": {
                         "name": item.name,
                         "metadata": {"slug": item.slug, "sku": item.sku},
@@ -501,7 +501,7 @@ def create_checkout_session(body: CheckoutSessionRequest):
                 },
                 "quantity": item.quantity,
             }
-            for item in body.items
+            for item in body.cart_items
         ]
 
         session = stripe.checkout.Session.create(
