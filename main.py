@@ -451,7 +451,7 @@ def get_cj_token():
 
 # ─── Stripe Checkout ─────────────────────────────────────────────────────────
 
-FRONTEND_DOMAIN = os.environ.get("FRONTEND_URL", "https://covora.zeabur.app")
+FRONTEND_DOMAIN = os.environ.get("FRONTEND_URL", "https://covoralumiere.com")
 
 class CheckoutItem(BaseModel):
     id: str
